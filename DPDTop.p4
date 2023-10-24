@@ -20,9 +20,8 @@
 //== Preamble: macro, header and parser definitions
 #define INC 4
 #define THRESHOLD_FIX 0xffe0 // 0xffff - 0x1f
-#define FIX_SNAP_COUNTER_VAL 0x950
-#define THRESHOLD_INSERT 0x800
-#define MAX_SNAP_COUNTER 0xffff
+#define FIX_ABR_COUNTER_VAL 0x80
+#define MAX_ABR_COUNTER 0xffff
 
 #define _OAT(act) table tb_## act {  \
             actions = {act;}                 \
@@ -46,7 +45,7 @@ const ip_protocol_t IP_PROTOCOLS_UDP = 17;
 
 struct pid_reg_pair_t {
     bit<16> pid;
-    bit<16> snap_counter;
+    bit<16> abridged_counter;
 }
 
 
@@ -154,7 +153,7 @@ struct ig_metadata_t {
 
     //fix information
     bit<32> fix_counter;
-    bit<16> fix_snap_counter;
+    bit<16> fix_abridged_counter;
 
     //if so, we need to carry current count, and remember c_min/min_stage
     bit<32> counter_read_1;
@@ -185,7 +184,6 @@ parser TofinoIngressParser(
 
     state parse_resubmit {
         // Parse resubmitted packet here.
-        //pkt.advance(64);
         pkt.extract(ig_md.resubmit_data_read);
         transition accept;
     }
@@ -324,20 +322,9 @@ control SwitchIngress(
             bit<16> dst_value_2 = hdr.ipv4.dst_addr[31:16];
 
             ig_md.flow_id_part_1=(src_value_1 & BYTE_1) | (dst_value_2 & BYTE_2);
-            //ig_md.flow_id_part_1[7:0]=hdr.ipv4.src_addr[7:0];
-            //ig_md.flow_id_part_1[15:8]=hdr.ipv4.dst_addr[31:24];
-
             ig_md.flow_id_part_2=(src_value_1 & BYTE_2) | (dst_value_2 & BYTE_1);
-            //ig_md.flow_id_part_2[7:0]=hdr.ipv4.src_addr[15:8];
-            //ig_md.flow_id_part_2[15:8]=hdr.ipv4.dst_addr[23:16];
-
             ig_md.flow_id_part_3=(src_value_2 & BYTE_1) | (dst_value_1 & BYTE_2);
-            //ig_md.flow_id_part_3[7:0]=hdr.ipv4.src_addr[23:16];
-            //ig_md.flow_id_part_3[15:8]=hdr.ipv4.dst_addr[15:8];
-
             ig_md.flow_id_part_4=(src_value_2 & BYTE_2) | (dst_value_1 & BYTE_1);
-            //ig_md.flow_id_part_4[7:0]=hdr.ipv4.src_addr[31:24];
-            //ig_md.flow_id_part_4[15:8]=hdr.ipv4.dst_addr[7:0];
         }
         _OAT(copy_flow_id_common_)
 
@@ -345,8 +332,6 @@ control SwitchIngress(
 
         Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x8005,false,false,false,0,0)) hash1;
         Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x3D65,false,false,false,0,0)) hash2;
-        //possible polynomials in standards:
-        //0x8005,0x0589,0x3D65,0x1021,0x8BB7,0xA097
 
         action get_hashed_locations_1_(){
             ig_md.stage_1_loc=(bit<16>) hash1.get({
@@ -372,20 +357,7 @@ control SwitchIngress(
             });
         }
         _OAT(get_hashed_locations_1_)
-        //this can be later...
         _OAT(get_hashed_locations_2_)
-
-        action init_hash_seed(bit<3> v1, bit<5> v2, bit<7> v3){
-            ig_md.hash_seed_1=v1;
-            ig_md.hash_seed_2=v2;
-        }
-        table tb_init_hash_seed {
-            actions = {
-                init_hash_seed;
-            }
-            default_action = init_hash_seed(3w2,5w17,7w71);
-        }
-        //enables re-seeding from control plane
 
 
 // == Register arrays for the stateful data structure
@@ -408,16 +380,16 @@ control SwitchIngress(
             void apply(inout pid_reg_pair_t value, out bit<16> rv) {        \
                 pid_reg_pair_t in_value;                                    \
                 in_value = value;                                           \
-                rv = in_value.snap_counter;                                 \
+                rv = in_value.abridged_counter;                                 \
                 if(in_value.pid==ig_md.flow_id_part_## pi ){                \
                     /*Assume for this specification that counter value saturate
                         at his maximum value rather than wrapping around.*/\
-                    value.snap_counter=in_value.snap_counter |+| INC;       \
+                    value.abridged_counter=in_value.abridged_counter |+| INC;       \
                 } else {                                                    \
-                    if(in_value.snap_counter==1){                           \
+                    if(in_value.abridged_counter==1){                           \
                         value.pid=ig_md.flow_id_part_## pi;                 \
                     } else {                                                \
-                        value.snap_counter=in_value.snap_counter-1;         \
+                        value.abridged_counter=in_value.abridged_counter-1;         \
                         rv=0;                                               \
                     }                                                       \
                 }                                                           \
@@ -429,11 +401,11 @@ control SwitchIngress(
                 rv = 0;                                                     \
                 pid_reg_pair_t in_value;                                    \
                 in_value = value;                                           \
-                if(in_value.snap_counter>1){                                \
+                if(in_value.abridged_counter>1){                                \
                     if(in_value.pid==ig_md.flow_id_part_## pi){             \
                         rv=1;                                               \
                     }                                                       \
-                    value.snap_counter=in_value.snap_counter-1;             \
+                    value.abridged_counter=in_value.abridged_counter-1;             \
                 }                                                           \
             }                                                               \
         };                                                                  \
@@ -443,11 +415,7 @@ control SwitchIngress(
                 rv = 0;                                                     \
                 pid_reg_pair_t in_value;                                    \
                 in_value = value;                                           \
-                /*if(ig_md.resubmit_data_read.fix_counter > MAX_SNAP_COUNTER){*/\
-                    value.snap_counter=FIX_SNAP_COUNTER_VAL;                    \
-                /*} else {                                                    \
-                    TODO: value.snap_counter=in_value.snap_counter |+| ig_md.resubmit_data_read.fix_counter[15:0];   \
-                }  */                                                         \
+                value.abridged_counter=FIX_ABR_COUNTER_VAL;                    \
             }                                                               \
         };                                                                  \
         action exec_stage_## st ##_fid_fix_## pi ##_(){  stage_## st ##_fid_fix_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                             \
@@ -455,7 +423,7 @@ control SwitchIngress(
             void apply(inout pid_reg_pair_t value, out bit<16> rv) {        \
                 rv = 0;                                                     \
                 value.pid=0;                                                \
-                value.snap_counter=1;                                       \
+                value.abridged_counter=1;                                       \
             }                                                               \
         };                                                                  \
         action exec_stage_## st ##_fid_delete_## pi ##_(){ stage_## st ##_fid_delete_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                        \
@@ -472,38 +440,30 @@ control SwitchIngress(
 
         _OAT(exec_stage_1_fid_match_1_)
         _OAT(exec_stage_1_fid_fix_1_)
-        _OAT(exec_stage_1_fid_delete_1_)
 
         _OAT(exec_stage_1_fid_match_2_)
         _OAT(exec_stage_1_fid_fix_2_)
-        _OAT(exec_stage_1_fid_delete_2_)
 
         _OAT(exec_stage_1_fid_match_3_)
         _OAT(exec_stage_1_fid_fix_3_)
-        _OAT(exec_stage_1_fid_delete_3_)
 
         _OAT(exec_stage_1_fid_match_4_)
         _OAT(exec_stage_1_fid_fix_4_)
-        _OAT(exec_stage_1_fid_delete_4_)
 
         _OAT(exec_stage_2_fid_match_1_)
         _OAT(exec_stage_2_fid_decr_1_)
-        _OAT(exec_stage_2_fid_fix_1_)
         _OAT(exec_stage_2_fid_delete_1_)
 
         _OAT(exec_stage_2_fid_match_2_)
         _OAT(exec_stage_2_fid_decr_2_)
-        _OAT(exec_stage_2_fid_fix_2_)
         _OAT(exec_stage_2_fid_delete_2_)
 
         _OAT(exec_stage_2_fid_match_3_)
         _OAT(exec_stage_2_fid_decr_3_)
-        _OAT(exec_stage_2_fid_fix_3_)
         _OAT(exec_stage_2_fid_delete_3_)
 
         _OAT(exec_stage_2_fid_match_4_)
         _OAT(exec_stage_2_fid_decr_4_)
-        _OAT(exec_stage_2_fid_fix_4_)
         _OAT(exec_stage_2_fid_delete_4_)
 
 
@@ -554,7 +514,6 @@ control SwitchIngress(
         _OAT(exec_stage_1_counter_fix)
         _OAT(exec_stage_1_counter_write)
         _OAT(exec_stage_2_counter_incr)
-        _OAT(exec_stage_2_counter_fix)
         _OAT(exec_stage_2_counter_write)
 
         
@@ -577,18 +536,13 @@ control SwitchIngress(
             // Get flow ID
             _OAT(copy_flow_id_common_);
 
-            // optional hash re-seeding
-            //tb_init_hash_seed.apply();
-
             // Get hashed locations based on flow ID
             _OAT(get_hashed_locations_1_);
             _OAT(get_hashed_locations_2_);
 
-
             // === Start of DPDTop stage counter logic ===
 
-
-            // For normal packets, for each stage, we match flow ID, then increment or decrement snapshot and real counters
+            // For normal packets, for each stage, we match flow ID, then increment or decrement abridged and full counters
             // For resubmitted packet, just do write the relevant information at the right stage.
 
             bool is_resubmitted=(bool) ig_intr_md.resubmit_flag;
@@ -606,7 +560,6 @@ control SwitchIngress(
                 _OAT(exec_stage_1_fid_fix_3_);
                 _OAT(exec_stage_1_fid_fix_4_);
             }
-
 
             //have a boolean alias, for immediate use in gateway table controlling stage 2 fid match
             bool matched_at_stage_1=((ig_md.fid_matched_1_1!=0) && 
