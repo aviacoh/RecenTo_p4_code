@@ -1,2 +1,2 @@
-# Tofino implementation for DPDTop (Data Plan Deterministic Top-k) algorithm
+# Tofino implementation for RecenTo (Recent Top-k flows) algorithm
 
