@@ -40,9 +40,9 @@ const ip_protocol_t IP_PROTOCOLS_ICMP = 1;
 const ip_protocol_t IP_PROTOCOLS_TCP = 6;
 const ip_protocol_t IP_PROTOCOLS_UDP = 17;
 
-struct pid_reg_pair_t {
-    bit<16> pid;
-    bit<16> abridged_counter;
+struct p_register_pair_t {
+    bit<16> key;
+    bit<16> place_counter;
 }
 
 
@@ -114,19 +114,19 @@ header resubmit_data_skimmed_t {
 }
 
 
-@pa_container_size("ingress","ig_md.flow_id_part_1",16)
-@pa_container_size("ingress","ig_md.flow_id_part_2",16)
-@pa_container_size("ingress","ig_md.flow_id_part_3",16)
-@pa_container_size("ingress","ig_md.flow_id_part_4",16)
+@pa_container_size("ingress","ig_md.key_part_1",16)
+@pa_container_size("ingress","ig_md.key_part_2",16)
+@pa_container_size("ingress","ig_md.key_part_3",16)
+@pa_container_size("ingress","ig_md.key_part_4",16)
 struct ig_metadata_t {
     resubmit_data_64bit_t resubmit_data_read;
     resubmit_data_skimmed_t resubmit_data_write;
 
     //64bit flowID
-    bit<16> flow_id_part_1;
-    bit<16> flow_id_part_2;
-    bit<16> flow_id_part_3;
-    bit<16> flow_id_part_4;
+    bit<16> key_part_1;
+    bit<16> key_part_2;
+    bit<16> key_part_3;
+    bit<16> key_part_4;
 
     //register index to access (hash of flow ID, with different hash functions)
     bit<16> stage_1_loc;
@@ -135,22 +135,22 @@ struct ig_metadata_t {
     bit<3> hash_seed_1;
     bit<5> hash_seed_2;
 
-    //is flowID matched register entry?
-    bit<16> fid_matched_1_1;
-    bit<16> fid_matched_1_2;
-    bit<16> fid_matched_1_3;
-    bit<16> fid_matched_1_4;
-    bit<16> fid_matched_2_1;
-    bit<16> fid_matched_2_2;
-    bit<16> fid_matched_2_3;
-    bit<16> fid_matched_2_4;
+    //is partial key matched register entry?
+    bit<16> p_key_matched_1_1;
+    bit<16> p_key_matched_1_2;
+    bit<16> p_key_matched_1_3;
+    bit<16> p_key_matched_1_4;
+    bit<16> p_key_matched_2_1;
+    bit<16> p_key_matched_2_2;
+    bit<16> p_key_matched_2_3;
+    bit<16> p_key_matched_2_4;
 
     bool matched_at_stage_1;
     bool matched_at_stage_2;
 
     //fix information
-    bit<32> fix_counter;
-    bit<16> fix_abridged_counter;
+    bit<32> fix_flow_counter;
+    bit<16> fix_place_counter;
 
     //if so, we need to carry current count, and remember c_min/min_stage
     bit<32> counter_read_1;
@@ -309,7 +309,7 @@ control SwitchIngress(
 
 // == Calculate flow ID for the packet
 
-        action copy_flow_id_common_(){
+        action copy_key_common_(){
             #define BYTE_1 0xff
             #define BYTE_2 0xff00
 
@@ -318,12 +318,12 @@ control SwitchIngress(
             bit<16> src_value_2 = hdr.ipv4.src_addr[31:16];
             bit<16> dst_value_2 = hdr.ipv4.dst_addr[31:16];
 
-            ig_md.flow_id_part_1=(src_value_1 & BYTE_1) | (dst_value_2 & BYTE_2);
-            ig_md.flow_id_part_2=(src_value_1 & BYTE_2) | (dst_value_2 & BYTE_1);
-            ig_md.flow_id_part_3=(src_value_2 & BYTE_1) | (dst_value_1 & BYTE_2);
-            ig_md.flow_id_part_4=(src_value_2 & BYTE_2) | (dst_value_1 & BYTE_1);
+            ig_md.key_part_1=(src_value_1 & BYTE_1) | (dst_value_2 & BYTE_2);
+            ig_md.key_part_2=(src_value_1 & BYTE_2) | (dst_value_2 & BYTE_1);
+            ig_md.key_part_3=(src_value_2 & BYTE_1) | (dst_value_1 & BYTE_2);
+            ig_md.key_part_4=(src_value_2 & BYTE_2) | (dst_value_1 & BYTE_1);
         }
-        _OAT(copy_flow_id_common_)
+        _OAT(copy_key_common_)
 
 // == Calculate array indices for array access
 
@@ -333,24 +333,24 @@ control SwitchIngress(
         action get_hashed_locations_1_(){
             ig_md.stage_1_loc=(bit<16>) hash1.get({
                 ig_md.hash_seed_1,
-                ig_md.flow_id_part_1,
+                ig_md.key_part_1,
                 3w0,
-                ig_md.flow_id_part_2,
+                ig_md.key_part_2,
                 3w0,
-                ig_md.flow_id_part_3,
-                ig_md.flow_id_part_4
+                ig_md.key_part_3,
+                ig_md.key_part_4
             });
         }
         action get_hashed_locations_2_(){
             ig_md.stage_2_loc=(bit<16>) hash2.get({
                 ig_md.hash_seed_2,
-                ig_md.flow_id_part_1,
+                ig_md.key_part_1,
                 2w0,
-                ig_md.flow_id_part_2,
+                ig_md.key_part_2,
                 2w0,
-                ig_md.flow_id_part_3,
+                ig_md.key_part_3,
                 1w0,
-                ig_md.flow_id_part_4
+                ig_md.key_part_4
             });
         }
         _OAT(get_hashed_locations_1_)
@@ -359,71 +359,71 @@ control SwitchIngress(
 
 // == Register arrays for the stateful data structure
 
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_1_1_R;
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_1_2_R;
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_1_3_R;
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_1_4_R;
-        Register<bit<32>,_>(32w65536) reg_counter_1_R;
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_2_1_R;
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_2_2_R;
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_2_3_R;
-        Register<pid_reg_pair_t,_>(32w65536) reg_flowid_2_4_R;
-        Register<bit<32>,_>(32w65536) reg_counter_2_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_1_1_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_1_2_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_1_3_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_1_4_R;
+        Register<bit<32>,_>(32w65536) f_register_1_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_2_1_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_2_2_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_2_3_R;
+        Register<p_register_pair_t,_>(32w65536) p_register_2_4_R;
+        Register<bit<32>,_>(32w65536) f_register_2_R;
 
 
         // Define read/write actions for each flowID array
         #define RegAct_FlowID(st,pi) \
-        RegisterAction<pid_reg_pair_t, _, bit<16>>(reg_flowid_## st ##_## pi ##_R) stage_## st ##_fid_match_## pi ##_RA= {  \
-            void apply(inout pid_reg_pair_t value, out bit<16> rv) {        \
-                pid_reg_pair_t in_value;                                    \
+        RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_match_## pi ##_RA= {  \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
+                p_register_pair_t in_value;                                    \
                 in_value = value;                                           \
-                rv = in_value.abridged_counter;                                 \
-                if(in_value.pid==ig_md.flow_id_part_## pi ){                \
+                rv = in_value.place_counter;                                 \
+                if(in_value.key==ig_md.key_part_## pi ){                \
                     /*Assume for this specification that counter value saturate
                         at his maximum value rather than wrapping around.*/\
-                    value.abridged_counter=in_value.abridged_counter |+| INC;       \
+                    value.place_counter=in_value.place_counter |+| INC;       \
                 } else {                                                    \
-                    if(in_value.abridged_counter==1){                           \
-                        value.pid=ig_md.flow_id_part_## pi;                 \
+                    if(in_value.place_counter==1){                           \
+                        value.key=ig_md.key_part_## pi;                 \
                     } else {                                                \
-                        value.abridged_counter=in_value.abridged_counter-1;         \
+                        value.place_counter=in_value.place_counter-1;         \
                         rv=0;                                               \
                     }                                                       \
                 }                                                           \
             }                                                               \
         };                                                                  \
-        action exec_stage_## st ##_fid_match_## pi ##_(){  ig_md.fid_matched_## st ##_## pi=stage_## st ##_fid_match_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}        \
-        RegisterAction<pid_reg_pair_t, _, bit<16>>(reg_flowid_## st ##_## pi ##_R) stage_## st ##_fid_decr_## pi ##_RA= {  \
-            void apply(inout pid_reg_pair_t value, out bit<16> rv) {        \
+        action exec_stage_## st ##_p_reg_match_## pi ##_(){  ig_md.p_key_matched_## st ##_## pi=stage_## st ##_p_reg_match_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}        \
+        RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_decr_## pi ##_RA= {  \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
                 rv = 0;                                                     \
-                pid_reg_pair_t in_value;                                    \
+                p_register_pair_t in_value;                                    \
                 in_value = value;                                           \
-                if(in_value.abridged_counter>1){                                \
-                    if(in_value.pid==ig_md.flow_id_part_## pi){             \
+                if(in_value.place_counter>1){                                \
+                    if(in_value.key==ig_md.key_part_## pi){             \
                         rv=1;                                               \
                     }                                                       \
-                    value.abridged_counter=in_value.abridged_counter-1;             \
+                    value.place_counter=in_value.place_counter-1;             \
                 }                                                           \
             }                                                               \
         };                                                                  \
-        action exec_stage_## st ##_fid_decr_## pi ##_(){  ig_md.fid_matched_## st ##_## pi=stage_## st ##_fid_decr_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}  \
-        RegisterAction<pid_reg_pair_t, _, bit<16>>(reg_flowid_## st ##_## pi ##_R) stage_## st ##_fid_fix_## pi ##_RA= {  \
-            void apply(inout pid_reg_pair_t value, out bit<16> rv) {        \
+        action exec_stage_## st ##_p_reg_decr_## pi ##_(){  ig_md.p_key_matched_## st ##_## pi=stage_## st ##_p_reg_decr_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}  \
+        RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_fix_## pi ##_RA= {  \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
                 rv = 0;                                                     \
-                pid_reg_pair_t in_value;                                    \
+                p_register_pair_t in_value;                                    \
                 in_value = value;                                           \
-                value.abridged_counter=FIX_ABR_COUNTER_VAL;                    \
+                value.place_counter=FIX_ABR_COUNTER_VAL;                    \
             }                                                               \
         };                                                                  \
-        action exec_stage_## st ##_fid_fix_## pi ##_(){  stage_## st ##_fid_fix_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                             \
-        RegisterAction<pid_reg_pair_t, _, bit<16>>(reg_flowid_## st ##_## pi ##_R) stage_## st ##_fid_delete_## pi ##_RA= {  \
-            void apply(inout pid_reg_pair_t value, out bit<16> rv) {        \
+        action exec_stage_## st ##_p_reg_fix_## pi ##_(){  stage_## st ##_p_reg_fix_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                             \
+        RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_delete_## pi ##_RA= {  \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
                 rv = 0;                                                     \
-                value.pid=0;                                                \
-                value.abridged_counter=1;                                       \
+                value.key=0;                                                \
+                value.place_counter=1;                                       \
             }                                                               \
         };                                                                  \
-        action exec_stage_## st ##_fid_delete_## pi ##_(){ stage_## st ##_fid_delete_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                        \
+        action exec_stage_## st ##_p_reg_delete_## pi ##_(){ stage_## st ##_p_reg_delete_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                        \
         //done
 
         RegAct_FlowID(1,1)
@@ -435,33 +435,33 @@ control SwitchIngress(
         RegAct_FlowID(2,3)
         RegAct_FlowID(2,4)
 
-        _OAT(exec_stage_1_fid_match_1_)
-        _OAT(exec_stage_1_fid_fix_1_)
+        _OAT(exec_stage_1_p_reg_match_1_)
+        _OAT(exec_stage_1_p_reg_fix_1_)
 
-        _OAT(exec_stage_1_fid_match_2_)
-        _OAT(exec_stage_1_fid_fix_2_)
+        _OAT(exec_stage_1_p_reg_match_2_)
+        _OAT(exec_stage_1_p_reg_fix_2_)
 
-        _OAT(exec_stage_1_fid_match_3_)
-        _OAT(exec_stage_1_fid_fix_3_)
+        _OAT(exec_stage_1_p_reg_match_3_)
+        _OAT(exec_stage_1_p_reg_fix_3_)
 
-        _OAT(exec_stage_1_fid_match_4_)
-        _OAT(exec_stage_1_fid_fix_4_)
+        _OAT(exec_stage_1_p_reg_match_4_)
+        _OAT(exec_stage_1_p_reg_fix_4_)
 
-        _OAT(exec_stage_2_fid_match_1_)
-        _OAT(exec_stage_2_fid_decr_1_)
-        _OAT(exec_stage_2_fid_delete_1_)
+        _OAT(exec_stage_2_p_reg_match_1_)
+        _OAT(exec_stage_2_p_reg_decr_1_)
+        _OAT(exec_stage_2_p_reg_delete_1_)
 
-        _OAT(exec_stage_2_fid_match_2_)
-        _OAT(exec_stage_2_fid_decr_2_)
-        _OAT(exec_stage_2_fid_delete_2_)
+        _OAT(exec_stage_2_p_reg_match_2_)
+        _OAT(exec_stage_2_p_reg_decr_2_)
+        _OAT(exec_stage_2_p_reg_delete_2_)
 
-        _OAT(exec_stage_2_fid_match_3_)
-        _OAT(exec_stage_2_fid_decr_3_)
-        _OAT(exec_stage_2_fid_delete_3_)
+        _OAT(exec_stage_2_p_reg_match_3_)
+        _OAT(exec_stage_2_p_reg_decr_3_)
+        _OAT(exec_stage_2_p_reg_delete_3_)
 
-        _OAT(exec_stage_2_fid_match_4_)
-        _OAT(exec_stage_2_fid_decr_4_)
-        _OAT(exec_stage_2_fid_delete_4_)
+        _OAT(exec_stage_2_p_reg_match_4_)
+        _OAT(exec_stage_2_p_reg_decr_4_)
+        _OAT(exec_stage_2_p_reg_delete_4_)
 
 
         action set_matched_at_stage_1_(){
@@ -476,7 +476,7 @@ control SwitchIngress(
 
         // Define stateful actions for matching flow ID
         #define RegAct_Counter(st) \
-        RegisterAction<bit<32>, _, bit<32>>(reg_counter_## st  ##_R) stage_## st ##_counter_incr = {  \
+        RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_incr = {  \
             void apply(inout bit<32> value, out bit<32> rv) {         \
                 rv = 0;                                               \
                 bit<32> in_value;                                     \
@@ -486,7 +486,7 @@ control SwitchIngress(
             }                                                         \
         };                                                            \
         action exec_stage_## st ##_counter_incr(){  ig_md.counter_read_## st =stage_## st ##_counter_incr.execute(ig_md.stage_## st ##_loc);} \
-        RegisterAction<bit<32>, _, bit<32>>(reg_counter_## st  ##_R) stage_## st ##_counter_fix = {  \
+        RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_fix = {  \
             void apply(inout bit<32> value, out bit<32> rv) {           \
                 rv = 0;                                                 \
                 bit<32> in_value;                                       \
@@ -496,7 +496,7 @@ control SwitchIngress(
             }                                                           \
         };                                                              \
         action exec_stage_## st ##_counter_fix(){  ig_md.counter_read_## st =stage_## st ##_counter_fix.execute(ig_md.stage_## st ##_loc);} \
-        RegisterAction<bit<32>, _, bit<32>>(reg_counter_## st  ##_R) stage_## st ##_counter_write = {  \
+        RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_write = {  \
             void apply(inout bit<32> value, out bit<32> rv) {           \
                 rv = value;                                                 \
                 value = 1;                                              \
@@ -531,7 +531,7 @@ control SwitchIngress(
 
             // === Preprocessing ===
             // Get flow ID
-            _OAT(copy_flow_id_common_);
+            _OAT(copy_key_common_);
 
             // Get hashed locations based on flow ID
             _OAT(get_hashed_locations_1_);
@@ -539,7 +539,7 @@ control SwitchIngress(
 
             // === Start of DPDTop stage counter logic ===
 
-            // For normal packets, for each stage, we match flow ID, then increment or decrement abridged and full counters
+            // For normal packets, for each stage, we match flow ID, then increment or decrement place and flow counters
             // For resubmitted packet, just do write the relevant information at the right stage.
 
             bool is_resubmitted=(bool) ig_intr_md.resubmit_flag;
@@ -547,32 +547,32 @@ control SwitchIngress(
             // = Stage 1 match =
 
             if(!is_resubmitted){
-                _OAT(exec_stage_1_fid_match_1_);
-                _OAT(exec_stage_1_fid_match_2_);
-                _OAT(exec_stage_1_fid_match_3_);
-                _OAT(exec_stage_1_fid_match_4_);
+                _OAT(exec_stage_1_p_reg_match_1_);
+                _OAT(exec_stage_1_p_reg_match_2_);
+                _OAT(exec_stage_1_p_reg_match_3_);
+                _OAT(exec_stage_1_p_reg_match_4_);
             } else {
-                _OAT(exec_stage_1_fid_fix_1_);
-                _OAT(exec_stage_1_fid_fix_2_);
-                _OAT(exec_stage_1_fid_fix_3_);
-                _OAT(exec_stage_1_fid_fix_4_);
+                _OAT(exec_stage_1_p_reg_fix_1_);
+                _OAT(exec_stage_1_p_reg_fix_2_);
+                _OAT(exec_stage_1_p_reg_fix_3_);
+                _OAT(exec_stage_1_p_reg_fix_4_);
             }
 
             //have a boolean alias, for immediate use in gateway table controlling stage 2 fid match
-            bool matched_at_stage_1=((ig_md.fid_matched_1_1!=0) && 
-               (ig_md.fid_matched_1_2!=0) && 
-               (ig_md.fid_matched_1_3!=0) && 
-               (ig_md.fid_matched_1_4!=0));
+            bool matched_at_stage_1=((ig_md.p_key_matched_1_1!=0) && 
+               (ig_md.p_key_matched_1_2!=0) && 
+               (ig_md.p_key_matched_1_3!=0) && 
+               (ig_md.p_key_matched_1_4!=0));
             //also have a boolean phv value, for longer gateway matches
             if(matched_at_stage_1)
             {
                 _OAT(set_matched_at_stage_1_);
             }
 
-            bool replaced_at_stage_1=((ig_md.fid_matched_1_1==1) || 
-               (ig_md.fid_matched_1_2==1) || 
-               (ig_md.fid_matched_1_3==1) || 
-               (ig_md.fid_matched_1_4==1));
+            bool replaced_at_stage_1=((ig_md.p_key_matched_1_1==1) || 
+               (ig_md.p_key_matched_1_2==1) || 
+               (ig_md.p_key_matched_1_3==1) || 
+               (ig_md.p_key_matched_1_4==1));
 
             // = Stage 1 incr =
 
@@ -590,37 +590,37 @@ control SwitchIngress(
             // = Stage 2 match =
 
             if(!is_resubmitted && !matched_at_stage_1){
-                _OAT(exec_stage_2_fid_match_1_);
-                _OAT(exec_stage_2_fid_match_2_);
-                _OAT(exec_stage_2_fid_match_3_);
-                _OAT(exec_stage_2_fid_match_4_);
+                _OAT(exec_stage_2_p_reg_match_1_);
+                _OAT(exec_stage_2_p_reg_match_2_);
+                _OAT(exec_stage_2_p_reg_match_3_);
+                _OAT(exec_stage_2_p_reg_match_4_);
             } else if(!is_resubmitted) {
-                _OAT(exec_stage_2_fid_decr_1_);
-                _OAT(exec_stage_2_fid_decr_2_);
-                _OAT(exec_stage_2_fid_decr_3_);
-                _OAT(exec_stage_2_fid_decr_4_);
+                _OAT(exec_stage_2_p_reg_decr_1_);
+                _OAT(exec_stage_2_p_reg_decr_2_);
+                _OAT(exec_stage_2_p_reg_decr_3_);
+                _OAT(exec_stage_2_p_reg_decr_4_);
             }else{
-                _OAT(exec_stage_2_fid_delete_1_);
-                _OAT(exec_stage_2_fid_delete_2_);
-                _OAT(exec_stage_2_fid_delete_3_);
-                _OAT(exec_stage_2_fid_delete_4_);
+                _OAT(exec_stage_2_p_reg_delete_1_);
+                _OAT(exec_stage_2_p_reg_delete_2_);
+                _OAT(exec_stage_2_p_reg_delete_3_);
+                _OAT(exec_stage_2_p_reg_delete_4_);
             }
 
 
 
-             if((ig_md.fid_matched_2_1!=0) &&
-                (ig_md.fid_matched_2_2!=0) &&
-                (ig_md.fid_matched_2_3!=0) &&
-                (ig_md.fid_matched_2_4!=0))
+             if((ig_md.p_key_matched_2_1!=0) &&
+                (ig_md.p_key_matched_2_2!=0) &&
+                (ig_md.p_key_matched_2_3!=0) &&
+                (ig_md.p_key_matched_2_4!=0))
                 {
                 _OAT(set_matched_at_stage_2_);
                 }
                 
 
-            bool replaced_or_duplicate_at_stage_2=((ig_md.fid_matched_2_1==1) || 
-               (ig_md.fid_matched_2_2==1) || 
-               (ig_md.fid_matched_2_3==1) || 
-               (ig_md.fid_matched_2_4==1));
+            bool replaced_or_duplicate_at_stage_2=((ig_md.p_key_matched_2_1==1) || 
+               (ig_md.p_key_matched_2_2==1) || 
+               (ig_md.p_key_matched_2_3==1) || 
+               (ig_md.p_key_matched_2_4==1));
 
             // = Stage 2 incr =
             if(!is_resubmitted){
