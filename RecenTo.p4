@@ -17,13 +17,12 @@
 //== Preamble: macro, header and parser definitions
 #define INC 4
 #define THRESHOLD_FIX 0xffe0 // 0xffff - 0x1f
-#define FIX_ABR_COUNTER_VAL 0x80
-#define MAX_ABR_COUNTER 0xffff
+#define FIX_P_COUNTER_VAL 0x80
 
 #define _OAT(act) table tb_## act {  \
-            actions = {act;}                 \
-            default_action = act();          \
-            size = 1;               \
+            actions = {act;}         \
+            default_action = act();  \
+            size = 1;                \
         }
 
 #include <core.p4>
@@ -47,9 +46,9 @@ struct p_register_pair_t {
 
 
 header ethernet_h {
-    mac_addr_t dst_addr;
-    mac_addr_t src_addr;
-    bit<16> ether_type;
+    mac_addr_t  dst_addr;
+    mac_addr_t  src_addr;
+    bit<16>     ether_type;
 }
 
 header vlan_h {
@@ -60,16 +59,16 @@ header vlan_h {
 }
 
 header ipv4_h {
-    bit<4> version;
-    bit<4> ihl;
-    bit<8> diffserv;
-    bit<16> total_len;
-    bit<16> identification;
-    bit<3> flags;
-    bit<13> frag_offset;
-    bit<8> ttl;
-    bit<8> protocol;
-    bit<16> hdr_checksum;
+    bit<4>      version;
+    bit<4>      ihl;
+    bit<8>      diffserv;
+    bit<16>     total_len;
+    bit<16>     identification;
+    bit<3>      flags;
+    bit<13>     frag_offset;
+    bit<8>      ttl;
+    bit<8>      protocol;
+    bit<16>     hdr_checksum;
     ipv4_addr_t src_addr;
     ipv4_addr_t dst_addr;
 }
@@ -80,9 +79,9 @@ header tcp_h {
 
     bit<32> seq_no;
     bit<32> ack_no;
-    bit<4> data_offset;
-    bit<4> res;
-    bit<8> flags;
+    bit<4>  data_offset;
+    bit<4>  res;
+    bit<8>  flags;
     bit<16> window;
     bit<16> checksum;
     bit<16> urgent_ptr;
@@ -96,11 +95,11 @@ header udp_h {
 }
 
 struct header_t {
-    ethernet_h ethernet;
-    vlan_h vlan;
-    ipv4_h ipv4;
-    tcp_h tcp;
-    udp_h udp;
+    ethernet_h  ethernet;
+    vlan_h      vlan;
+    ipv4_h      ipv4;
+    tcp_h       tcp;
+    udp_h       udp;
 }
 
 header resubmit_data_64bit_t {
@@ -363,66 +362,66 @@ control SwitchIngress(
         Register<p_register_pair_t,_>(32w65536) p_register_1_2_R;
         Register<p_register_pair_t,_>(32w65536) p_register_1_3_R;
         Register<p_register_pair_t,_>(32w65536) p_register_1_4_R;
-        Register<bit<32>,_>(32w65536) f_register_1_R;
+        Register<bit<32>,_>(32w65536)           f_register_1_R;
         Register<p_register_pair_t,_>(32w65536) p_register_2_1_R;
         Register<p_register_pair_t,_>(32w65536) p_register_2_2_R;
         Register<p_register_pair_t,_>(32w65536) p_register_2_3_R;
         Register<p_register_pair_t,_>(32w65536) p_register_2_4_R;
-        Register<bit<32>,_>(32w65536) f_register_2_R;
+        Register<bit<32>,_>(32w65536)           f_register_2_R;
 
 
         // Define read/write actions for each P_register array
         #define RegAct_P_register(st,pi) \
         RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_match_## pi ##_RA= {  \
-            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
-                p_register_pair_t in_value;                                    \
-                in_value = value;                                           \
-                rv = in_value.place_counter;                                 \
-                if(in_value.key==ig_md.key_part_## pi ){                \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {         \
+                p_register_pair_t in_value;                                     \
+                in_value = value;                                               \
+                rv = in_value.place_counter;                                    \
+                if(in_value.key==ig_md.key_part_## pi ){                        \
                     /*Assume for this specification that counter value saturate
-                        at his maximum value rather than wrapping around.*/\
-                    value.place_counter=in_value.place_counter |+| INC;       \
-                } else {                                                    \
-                    if(in_value.place_counter==1){                           \
-                        value.key=ig_md.key_part_## pi;                 \
-                    } else {                                                \
-                        value.place_counter=in_value.place_counter-1;         \
-                        rv=0;                                               \
-                    }                                                       \
-                }                                                           \
-            }                                                               \
-        };                                                                  \
+                        at his maximum value rather than wrapping around.*/     \
+                    value.place_counter=in_value.place_counter |+| INC;         \
+                } else {                                                        \
+                    if(in_value.place_counter==1){                              \
+                        value.key=ig_md.key_part_## pi;                         \
+                    } else {                                                    \
+                        value.place_counter=in_value.place_counter-1;           \
+                        rv=0;                                                   \
+                    }                                                           \
+                }                                                               \
+            }                                                                   \
+        };                                                                      \
         action exec_stage_## st ##_p_reg_match_## pi ##_(){  ig_md.p_key_matched_## st ##_## pi=stage_## st ##_p_reg_match_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}        \
         RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_decr_## pi ##_RA= {  \
-            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
-                rv = 0;                                                     \
-                p_register_pair_t in_value;                                    \
-                in_value = value;                                           \
-                if(in_value.place_counter>1){                                \
-                    if(in_value.key==ig_md.key_part_## pi){             \
-                        rv=1;                                               \
-                    }                                                       \
-                    value.place_counter=in_value.place_counter-1;             \
-                }                                                           \
-            }                                                               \
-        };                                                                  \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {         \
+                rv = 0;                                                         \
+                p_register_pair_t in_value;                                     \
+                in_value = value;                                               \
+                if(in_value.place_counter>1){                                   \
+                    if(in_value.key==ig_md.key_part_## pi){                     \
+                        rv=1;                                                   \
+                    }                                                           \
+                    value.place_counter=in_value.place_counter-1;               \
+                }                                                               \
+            }                                                                   \
+        };                                                                      \
         action exec_stage_## st ##_p_reg_decr_## pi ##_(){  ig_md.p_key_matched_## st ##_## pi=stage_## st ##_p_reg_decr_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}  \
         RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_fix_## pi ##_RA= {  \
-            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
-                rv = 0;                                                     \
-                p_register_pair_t in_value;                                    \
-                in_value = value;                                           \
-                value.place_counter=FIX_ABR_COUNTER_VAL;                    \
-            }                                                               \
-        };                                                                  \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {         \
+                rv = 0;                                                         \
+                p_register_pair_t in_value;                                     \
+                in_value = value;                                               \
+                value.place_counter=FIX_P_COUNTER_VAL;                          \
+            }                                                                   \
+        };                                                                      \
         action exec_stage_## st ##_p_reg_fix_## pi ##_(){  stage_## st ##_p_reg_fix_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                             \
         RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_delete_## pi ##_RA= {  \
-            void apply(inout p_register_pair_t value, out bit<16> rv) {        \
-                rv = 0;                                                     \
-                value.key=0;                                                \
-                value.place_counter=1;                                       \
-            }                                                               \
-        };                                                                  \
+            void apply(inout p_register_pair_t value, out bit<16> rv) {         \
+                rv = 0;                                                         \
+                value.key=0;                                                    \
+                value.place_counter=1;                                          \
+            }                                                                   \
+        };                                                                      \
         action exec_stage_## st ##_p_reg_delete_## pi ##_(){ stage_## st ##_p_reg_delete_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                        \
         //done
 
@@ -477,31 +476,31 @@ control SwitchIngress(
         // Define read/write actions for each F_register array
         #define RegAct_Counter(st) \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_incr = {  \
-            void apply(inout bit<32> value, out bit<32> rv) {         \
-                rv = 0;                                               \
-                bit<32> in_value;                                     \
-                in_value = value;                                     \
-                value = in_value |+| 1;                               \
-                rv = value;                                           \
-            }                                                         \
-        };                                                            \
+            void apply(inout bit<32> value, out bit<32> rv) {               \
+                rv = 0;                                                     \
+                bit<32> in_value;                                           \
+                in_value = value;                                           \
+                value = in_value |+| 1;                                     \
+                rv = value;                                                 \
+            }                                                               \
+        };                                                                  \
         action exec_stage_## st ##_counter_incr(){  ig_md.counter_read_## st =stage_## st ##_counter_incr.execute(ig_md.stage_## st ##_loc);} \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_fix = {  \
-            void apply(inout bit<32> value, out bit<32> rv) {           \
-                rv = 0;                                                 \
-                bit<32> in_value;                                       \
-                in_value = value;                                       \
+            void apply(inout bit<32> value, out bit<32> rv) {               \
+                rv = 0;                                                     \
+                bit<32> in_value;                                           \
+                in_value = value;                                           \
                 value = in_value |+| ig_md.resubmit_data_read.fix_counter;  \
-                rv = value;                                             \
-            }                                                           \
-        };                                                              \
+                rv = value;                                                 \
+            }                                                               \
+        };                                                                  \
         action exec_stage_## st ##_counter_fix(){  ig_md.counter_read_## st =stage_## st ##_counter_fix.execute(ig_md.stage_## st ##_loc);} \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_write = {  \
-            void apply(inout bit<32> value, out bit<32> rv) {           \
+            void apply(inout bit<32> value, out bit<32> rv) {               \
                 rv = value;                                                 \
-                value = 1;                                              \
-            }                                                           \
-        };                                                              \
+                value = 1;                                                  \
+            }                                                               \
+        };                                                                  \
         action exec_stage_## st ##_counter_write(){  ig_md.resubmit_data_write.fix_counter = stage_## st ##_counter_write.execute(ig_md.stage_## st ##_loc);} \
         //done
 
