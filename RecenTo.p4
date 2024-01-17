@@ -122,13 +122,13 @@ struct ig_metadata_t {
     resubmit_data_64bit_t resubmit_data_read;
     resubmit_data_skimmed_t resubmit_data_write;
 
-    //64bit flowID
+    //64bit Keys
     bit<16> key_part_1;
     bit<16> key_part_2;
     bit<16> key_part_3;
     bit<16> key_part_4;
 
-    //register index to access (hash of flow ID, with different hash functions)
+    //register index to access (hash of key, with different hash functions)
     bit<16> stage_1_loc;
     bit<16> stage_2_loc;
     //hash seeds, different width
@@ -307,7 +307,7 @@ control SwitchIngress(
             ig_intr_tm_md.ucast_egress_port=64;
         }
 
-// == Calculate flow ID for the packet
+// == Calculate Key for the packet
 
         action copy_key_common_(){
             #define BYTE_1 0xff
@@ -371,8 +371,8 @@ control SwitchIngress(
         Register<bit<32>,_>(32w65536) f_register_2_R;
 
 
-        // Define read/write actions for each flowID array
-        #define RegAct_FlowID(st,pi) \
+        // Define read/write actions for each P_register array
+        #define RegAct_P_register(st,pi) \
         RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_match_## pi ##_RA= {  \
             void apply(inout p_register_pair_t value, out bit<16> rv) {        \
                 p_register_pair_t in_value;                                    \
@@ -426,14 +426,14 @@ control SwitchIngress(
         action exec_stage_## st ##_p_reg_delete_## pi ##_(){ stage_## st ##_p_reg_delete_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}                                        \
         //done
 
-        RegAct_FlowID(1,1)
-        RegAct_FlowID(1,2)
-        RegAct_FlowID(1,3)
-        RegAct_FlowID(1,4)
-        RegAct_FlowID(2,1)
-        RegAct_FlowID(2,2)
-        RegAct_FlowID(2,3)
-        RegAct_FlowID(2,4)
+        RegAct_P_register(1,1)
+        RegAct_P_register(1,2)
+        RegAct_P_register(1,3)
+        RegAct_P_register(1,4)
+        RegAct_P_register(2,1)
+        RegAct_P_register(2,2)
+        RegAct_P_register(2,3)
+        RegAct_P_register(2,4)
 
         _OAT(exec_stage_1_p_reg_match_1_)
         _OAT(exec_stage_1_p_reg_fix_1_)
@@ -474,7 +474,7 @@ control SwitchIngress(
         _OAT(set_matched_at_stage_2_)
 
 
-        // Define stateful actions for matching flow ID
+        // Define read/write actions for each F_register array
         #define RegAct_Counter(st) \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_incr = {  \
             void apply(inout bit<32> value, out bit<32> rv) {         \
@@ -530,16 +530,16 @@ control SwitchIngress(
             route_to_64();
 
             // === Preprocessing ===
-            // Get flow ID
+            // Get Key
             _OAT(copy_key_common_);
 
-            // Get hashed locations based on flow ID
+            // Get hashed locations based on Key
             _OAT(get_hashed_locations_1_);
             _OAT(get_hashed_locations_2_);
 
             // === Start of RecenTo stage counter logic ===
 
-            // For normal packets, for each stage, we match flow ID, then increment or decrement place and flow counters
+            // For normal packets, for each stage, we match key, then increment or decrement place and flow counters
             // For resubmitted packet, just do write the relevant information at the right stage.
 
             bool is_resubmitted=(bool) ig_intr_md.resubmit_flag;
