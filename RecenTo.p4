@@ -16,7 +16,8 @@
 
 //== Preamble: macro, header and parser definitions
 #define INC 4
-#define THRESHOLD_FIX 0xffe0 // 0xffff - 0x1f
+//#define THRESHOLD_FIX 0xffe0 // 0xffff - 0x1f
+#define THRESHOLD_FIX 0xfffc
 #define FIX_P_COUNTER_VAL 0x80
 
 #define _OAT(act) table tb_## act {  \
@@ -327,30 +328,29 @@ control SwitchIngress(
 // == Calculate array indices for array access
 
         Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x8005,false,false,false,0,0)) hash1;
-        Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x3D65,false,false,false,0,0)) hash2;
+        Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x8005,false,false,false,0,0)) hash2;
 
         action get_hashed_locations_1_(){
-            ig_md.stage_1_loc=(bit<16>) hash1.get({
-                ig_md.hash_seed_1,
+            ig_md.stage_1_loc=1; /*(bit<16>) hash1.get({
+                3w2,
                 ig_md.key_part_1,
                 3w0,
                 ig_md.key_part_2,
                 3w0,
                 ig_md.key_part_3,
                 ig_md.key_part_4
-            });
+            });*/
         }
         action get_hashed_locations_2_(){
-            ig_md.stage_2_loc=(bit<16>) hash2.get({
-                ig_md.hash_seed_2,
+            ig_md.stage_2_loc=1;/*(bit<16>) hash2.get({
+                3w2,
                 ig_md.key_part_1,
-                2w0,
+		3w0,
                 ig_md.key_part_2,
-                2w0,
+                3w0,
                 ig_md.key_part_3,
-                1w0,
                 ig_md.key_part_4
-            });
+            });*/
         }
         _OAT(get_hashed_locations_1_)
         _OAT(get_hashed_locations_2_)
@@ -376,17 +376,16 @@ control SwitchIngress(
             void apply(inout p_register_pair_t value, out bit<16> rv) {         \
                 p_register_pair_t in_value;                                     \
                 in_value = value;                                               \
-                rv = in_value.place_counter;                                    \
                 if(in_value.key==ig_md.key_part_## pi ){                        \
-                    /*Assume for this specification that counter value saturate
+                    /*Assume for this specification that counter value saturate \
                         at his maximum value rather than wrapping around.*/     \
                     value.place_counter=in_value.place_counter |+| INC;         \
                 } else {                                                        \
-                    if(in_value.place_counter==1){                              \
+                    rv = in_value.place_counter;                                \
+                    if(in_value.place_counter<=1){                              \
                         value.key=ig_md.key_part_## pi;                         \
                     } else {                                                    \
                         value.place_counter=in_value.place_counter-1;           \
-                        rv=0;                                                   \
                     }                                                           \
                 }                                                               \
             }                                                                   \
@@ -394,14 +393,13 @@ control SwitchIngress(
         action exec_stage_## st ##_p_reg_match_## pi ##_(){  ig_md.p_key_matched_## st ##_## pi=stage_## st ##_p_reg_match_## pi ##_RA.execute(ig_md.stage_## st ##_loc);}        \
         RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_decr_## pi ##_RA= {  \
             void apply(inout p_register_pair_t value, out bit<16> rv) {         \
-                rv = 0;                                                         \
                 p_register_pair_t in_value;                                     \
                 in_value = value;                                               \
                 if(in_value.place_counter>1){                                   \
-                    if(in_value.key==ig_md.key_part_## pi){                     \
-                        rv=1;                                                   \
-                    }                                                           \
                     value.place_counter=in_value.place_counter-1;               \
+                }                                                               \
+                if(in_value.key!=ig_md.key_part_## pi){                         \
+                    rv=in_value.place_counter;                                  \
                 }                                                               \
             }                                                                   \
         };                                                                      \
@@ -434,7 +432,32 @@ control SwitchIngress(
         RegAct_P_register(2,3)
         RegAct_P_register(2,4)
 
-        _OAT(exec_stage_1_p_reg_match_1_)
+        #define Table_P_register_1(pi)                          \
+            table tb_update_p_registers_1_## pi {               \
+                /* Goal: recirculate using defined threshold*/  \
+                actions = {                                     \
+                    exec_stage_1_p_reg_match_## pi ##_;         \
+                    exec_stage_1_p_reg_fix_## pi ##_;           \
+                    nop;                                        \
+                }                                               \
+                key = {                                         \
+                    ig_intr_md.resubmit_flag: exact;            \
+                }                                               \
+                /*size = 512;*/                                 \
+                default_action = nop;                           \
+                const entries = {                               \
+                    (0): exec_stage_1_p_reg_match_## pi ##_();  \
+                    (1): exec_stage_1_p_reg_fix_## pi ##_();    \
+                }                                               \
+            }
+        
+        Table_P_register_1(1)
+        Table_P_register_1(2)
+        Table_P_register_1(3)
+        Table_P_register_1(4)
+
+
+        /*_OAT(exec_stage_1_p_reg_match_1_)
         _OAT(exec_stage_1_p_reg_fix_1_)
 
         _OAT(exec_stage_1_p_reg_match_2_)
@@ -444,8 +467,9 @@ control SwitchIngress(
         _OAT(exec_stage_1_p_reg_fix_3_)
 
         _OAT(exec_stage_1_p_reg_match_4_)
-        _OAT(exec_stage_1_p_reg_fix_4_)
+        _OAT(exec_stage_1_p_reg_fix_4_)*/
 
+        
         _OAT(exec_stage_2_p_reg_match_1_)
         _OAT(exec_stage_2_p_reg_decr_1_)
         _OAT(exec_stage_2_p_reg_delete_1_)
@@ -521,6 +545,32 @@ control SwitchIngress(
             ig_intr_dprsr_md.resubmit_type = 1;
         }
 
+         
+
+        /*table tb_maybe_sip_init {
+        key = {
+            hdr.sip_meta.isValid(): exact;
+            hdr.tcp.isValid(): exact;
+            hdr.sip_meta.round: ternary;
+        }
+        actions = {
+            //sip_init;
+            sip_init_default_key;
+            sip_continue_round4;
+            sip_continue_round8;
+            sip_end_round12_tagack_verify;
+            nop;
+        }
+        default_action = nop; 
+        size = 16;
+        const entries={
+            (false, true, _): sip_init_default_key(); //change key from control plane
+            (true, true, 4): sip_continue_round4();
+            (true, true, 8): sip_continue_round8();
+            (true, true, 12): sip_end_round12_tagack_verify();
+        }
+        }*/
+
 
         #undef _OAT
         #define _OAT(act) tb_##act.apply()
@@ -534,8 +584,8 @@ control SwitchIngress(
 
             // Get hashed locations based on Key
             _OAT(get_hashed_locations_1_);
-            _OAT(get_hashed_locations_2_);
-
+	        _OAT(get_hashed_locations_2_);
+           
             // === Start of RecenTo stage counter logic ===
 
             // For normal packets, for each stage, we match key, then increment or decrement place and flow counters
@@ -545,7 +595,7 @@ control SwitchIngress(
 
             // = Stage 1 match =
 
-            if(!is_resubmitted){
+            /*if(!is_resubmitted){
                 _OAT(exec_stage_1_p_reg_match_1_);
                 _OAT(exec_stage_1_p_reg_match_2_);
                 _OAT(exec_stage_1_p_reg_match_3_);
@@ -555,13 +605,21 @@ control SwitchIngress(
                 _OAT(exec_stage_1_p_reg_fix_2_);
                 _OAT(exec_stage_1_p_reg_fix_3_);
                 _OAT(exec_stage_1_p_reg_fix_4_);
-            }
+            }*/
+
+            _OAT(update_p_registers_1_1);
+            _OAT(update_p_registers_1_2);
+            _OAT(update_p_registers_1_3);
+            _OAT(update_p_registers_1_4);
+
+            bit<16> max_p_counter_stage_1_1 = max(ig_md.p_key_matched_1_1, ig_md.p_key_matched_1_2);
+            bit<16> max_p_counter_stage_1_2 = max(ig_md.p_key_matched_1_3, ig_md.p_key_matched_1_4);
+            // TODO use this value to enable insert_threshold
+            bit<16> max_p_counter_stage_1 = max(max_p_counter_stage_1_1, max_p_counter_stage_1_2);
 
             //have a boolean alias, for immediate use in gateway table controlling stage 2 fid match
-            bool matched_at_stage_1=((ig_md.p_key_matched_1_1!=0) && 
-               (ig_md.p_key_matched_1_2!=0) && 
-               (ig_md.p_key_matched_1_3!=0) && 
-               (ig_md.p_key_matched_1_4!=0));
+            bool matched_at_stage_1 = max_p_counter_stage_1 <= 1;
+            
             //also have a boolean phv value, for longer gateway matches
             if(matched_at_stage_1)
             {
@@ -585,55 +643,62 @@ control SwitchIngress(
                 _OAT(exec_stage_1_counter_fix);
             }
 
-
+            
             // = Stage 2 match =
 
             if(!is_resubmitted && !matched_at_stage_1){
                 _OAT(exec_stage_2_p_reg_match_1_);
                 _OAT(exec_stage_2_p_reg_match_2_);
-                _OAT(exec_stage_2_p_reg_match_3_);
-                _OAT(exec_stage_2_p_reg_match_4_);
             } else if(!is_resubmitted) {
                 _OAT(exec_stage_2_p_reg_decr_1_);
                 _OAT(exec_stage_2_p_reg_decr_2_);
-                _OAT(exec_stage_2_p_reg_decr_3_);
-                _OAT(exec_stage_2_p_reg_decr_4_);
             }else{
                 _OAT(exec_stage_2_p_reg_delete_1_);
                 _OAT(exec_stage_2_p_reg_delete_2_);
+            }
+
+            bit<16> max_p_counter_stage_2_1 = max(ig_md.p_key_matched_2_1, ig_md.p_key_matched_2_2);
+
+            if(!is_resubmitted && !matched_at_stage_1){
+                _OAT(exec_stage_2_p_reg_match_3_);
+                _OAT(exec_stage_2_p_reg_match_4_);
+            } else if(!is_resubmitted) {
+                _OAT(exec_stage_2_p_reg_decr_3_);
+                _OAT(exec_stage_2_p_reg_decr_4_);
+            }else{
                 _OAT(exec_stage_2_p_reg_delete_3_);
                 _OAT(exec_stage_2_p_reg_delete_4_);
             }
 
+            bit<16> max_p_counter_stage_2_2 = max(ig_md.p_key_matched_2_3, ig_md.p_key_matched_2_4);
+            // TODO use this value to enable insert_threshold
+            bit<16> max_p_counter_stage_2 = max(max_p_counter_stage_2_1, max_p_counter_stage_2_2);
 
-
-             if((ig_md.p_key_matched_2_1!=0) &&
-                (ig_md.p_key_matched_2_2!=0) &&
-                (ig_md.p_key_matched_2_3!=0) &&
-                (ig_md.p_key_matched_2_4!=0))
-                {
+             if(max_p_counter_stage_2 <= 1)
+            {
                 _OAT(set_matched_at_stage_2_);
-                }
+            }
                 
 
-            bool replaced_or_duplicate_at_stage_2=((ig_md.p_key_matched_2_1==1) || 
+            bool replaced_at_stage_2=((ig_md.p_key_matched_2_1==1) || 
                (ig_md.p_key_matched_2_2==1) || 
                (ig_md.p_key_matched_2_3==1) || 
                (ig_md.p_key_matched_2_4==1));
 
             // = Stage 2 incr =
             if(!is_resubmitted){
-                if(replaced_or_duplicate_at_stage_2){
+                if((matched_at_stage_1 && ig_md.matched_at_stage_2) || replaced_at_stage_2){
                     _OAT(exec_stage_2_counter_write);
                 }else if(ig_md.matched_at_stage_2){
                     _OAT(exec_stage_2_counter_incr);
                 }
             }
+            
 
             clear_resubmit_flag();
 
             // === If fix needed, run recirculation (actually resubmit) ===
-            if(!is_resubmitted && ig_md.matched_at_stage_1 && replaced_or_duplicate_at_stage_2){
+            if(!is_resubmitted && ig_md.matched_at_stage_1 && ig_md.matched_at_stage_2){
                 //none matched
                 //prepare for resubmit!
                 if(ig_md.resubmit_data_write.fix_counter & THRESHOLD_FIX != 0){
@@ -651,11 +716,9 @@ control SwitchIngress(
 
 
             if(ig_md.matched_at_stage_1){
-                hdr.ethernet.dst_addr=(bit<48>)ig_md.counter_read_1;
+                hdr.ipv4.dst_addr=(bit<32>)ig_md.counter_read_1;
             }else if(ig_md.matched_at_stage_2){
-                hdr.ethernet.dst_addr=(bit<48>)ig_md.counter_read_2;
-            }else{
-                hdr.ethernet.dst_addr=1;
+                 hdr.ipv4.src_addr=(bit<32>)ig_md.counter_read_2;
             }
         }
 }
