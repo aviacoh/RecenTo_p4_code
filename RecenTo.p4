@@ -1,6 +1,8 @@
 /*
     RecenTo: A recent heavy-htter detection algorithm using Minimal Recirculation
 
+    Copyright (C) 2024 Ozery Aviya, Open University of Israel
+
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU Affero General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
@@ -331,7 +333,7 @@ control SwitchIngress(
         Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x8005,false,false,false,0,0)) hash2;
 
         action get_hashed_locations_1_(){
-            ig_md.stage_1_loc=1; /*(bit<16>) hash1.get({
+            ig_md.stage_1_loc=(bit<16>) hash1.get({
                 3w2,
                 ig_md.key_part_1,
                 3w0,
@@ -339,10 +341,10 @@ control SwitchIngress(
                 3w0,
                 ig_md.key_part_3,
                 ig_md.key_part_4
-            });*/
+            });
         }
         action get_hashed_locations_2_(){
-            ig_md.stage_2_loc=1;/*(bit<16>) hash2.get({
+            ig_md.stage_2_loc=(bit<16>) hash2.get({
                 3w2,
                 ig_md.key_part_1,
 		3w0,
@@ -350,7 +352,7 @@ control SwitchIngress(
                 3w0,
                 ig_md.key_part_3,
                 ig_md.key_part_4
-            });*/
+            });
         }
         _OAT(get_hashed_locations_1_)
         _OAT(get_hashed_locations_2_)
@@ -654,7 +656,6 @@ control SwitchIngress(
             // For normal packets, for each stage, we match key, then increment or decrement place and flow counters
             // For resubmitted packet, just do write the relevant information at the right stage.
 
-            bool is_resubmitted=(bool) ig_intr_md.resubmit_flag;
 
             // === Table 1 ===
 
@@ -693,6 +694,7 @@ control SwitchIngress(
             clear_resubmit_flag();
 
             // === If fix needed, run recirculation (actually resubmit) ===
+            bool is_resubmitted=(bool) ig_intr_md.resubmit_flag;
             if(!is_resubmitted && ig_md.matched_at_stage_1 && ig_md.matched_at_stage_2){
                 //none matched
                 //prepare for resubmit!
