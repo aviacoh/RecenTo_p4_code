@@ -148,16 +148,16 @@ struct ig_metadata_t {
     bool matched_at_stage_1;
     bool matched_at_stage_2;
 
+    bool replaced_at_stage_1;
+    bool replaced_at_stage_2;
+
     //fix information
     bit<32> fix_flow_counter;
     bit<16> fix_place_counter;
 
-    //if so, we need to carry current count, and remember c_min/min_stage
+    //Saved the flow counter
     bit<32> counter_read_1;
     bit<32> counter_read_2;
-    //bit<32> counter_incr;//you have a match, this is incremented value
-    bit<32> c_min;
-    bit<32> diff;
 }
 struct eg_metadata_t {
 }
@@ -370,7 +370,7 @@ control SwitchIngress(
         Register<bit<32>,_>(32w65536)           f_register_2_R;
 
 
-        // Define read/write actions for each P_register array
+        // == Define read/write actions for each P_register array ==
         #define RegAct_P_register(st,pi) \
         RegisterAction<p_register_pair_t, _, bit<16>>(p_register_## st ##_## pi ##_R) stage_## st ##_p_reg_match_## pi ##_RA= {  \
             void apply(inout p_register_pair_t value, out bit<16> rv) {         \
@@ -432,9 +432,10 @@ control SwitchIngress(
         RegAct_P_register(2,3)
         RegAct_P_register(2,4)
 
+        // Create tables for P-registers in first table
         #define Table_P_register_1(pi)                          \
             table tb_update_p_registers_1_## pi {               \
-                /* Goal: recirculate using defined threshold*/  \
+                /* Usually run match action, fix in recirc*/    \
                 actions = {                                     \
                     exec_stage_1_p_reg_match_## pi ##_;         \
                     exec_stage_1_p_reg_fix_## pi ##_;           \
@@ -456,48 +457,93 @@ control SwitchIngress(
         Table_P_register_1(3)
         Table_P_register_1(4)
 
-
-        /*_OAT(exec_stage_1_p_reg_match_1_)
-        _OAT(exec_stage_1_p_reg_fix_1_)
-
-        _OAT(exec_stage_1_p_reg_match_2_)
-        _OAT(exec_stage_1_p_reg_fix_2_)
-
-        _OAT(exec_stage_1_p_reg_match_3_)
-        _OAT(exec_stage_1_p_reg_fix_3_)
-
-        _OAT(exec_stage_1_p_reg_match_4_)
-        _OAT(exec_stage_1_p_reg_fix_4_)*/
-
+        // Create tables for P-registers in second table
+        #define Table_P_register_2(pi)                                  \
+            table tb_update_p_registers_2_## pi {                       \
+                /* Usually run match action, decrease for prev match,
+                delete in recirc*/                                      \
+                actions = {                                             \
+                    exec_stage_2_p_reg_match_## pi ##_;                 \
+                    exec_stage_2_p_reg_decr_## pi ##_;                  \
+                    exec_stage_2_p_reg_delete_## pi ##_;                \
+                    nop;                                                \
+                }                                                       \
+                key = {                                                 \
+                    ig_intr_md.resubmit_flag: exact;                    \
+                    ig_md.matched_at_stage_1: ternary;                  \
+                }                                                       \
+                size = 16;                                              \
+                default_action = nop;                                   \
+                const entries = {                                       \
+                    (0, false): exec_stage_2_p_reg_match_## pi ##_();   \
+                    (0, true):  exec_stage_2_p_reg_decr_## pi ##_();    \
+                    (1, _):  exec_stage_2_p_reg_delete_## pi ##_();     \
+                }                                                       \
+            }
         
-        _OAT(exec_stage_2_p_reg_match_1_)
-        _OAT(exec_stage_2_p_reg_decr_1_)
-        _OAT(exec_stage_2_p_reg_delete_1_)
+        Table_P_register_2(1)
+        Table_P_register_2(2)
+        Table_P_register_2(3)
+        Table_P_register_2(4)
 
-        _OAT(exec_stage_2_p_reg_match_2_)
-        _OAT(exec_stage_2_p_reg_decr_2_)
-        _OAT(exec_stage_2_p_reg_delete_2_)
+        // == Define Fully match check after all P_registers reported status ==
+        #define Table_set_match(pi)                                                         \
+            action set_matched_at_stage_## pi ##_(){ ig_md.matched_at_stage_ ## pi =true;}  \
+            table tb_set_matched_at_stage_ ## pi ##_ {                                      \
+                /*Fully match only if all P-registers report match*/                        \
+                 actions = {                                                                \
+                    set_matched_at_stage_## pi ##_;                                         \
+                    nop;                                                                    \
+                }                                                                           \
+                key = {                                                                     \
+                    ig_md.p_key_matched_## pi ##_1: exact;                                  \
+                    ig_md.p_key_matched_## pi ##_2: exact;                                  \
+                    ig_md.p_key_matched_## pi ##_3: exact;                                  \
+                    ig_md.p_key_matched_## pi ##_4: exact;                                  \
+                }                                                                           \
+                size = 16;                                                                  \
+                default_action = nop;                                                       \
+                const entries = {                                                           \
+                    (0, 0, 0, 0): set_matched_at_stage_## pi ##_();                         \
+                }                                                                           \
+            }
+        
+        
+        Table_set_match(1)
+        Table_set_match(2)
 
-        _OAT(exec_stage_2_p_reg_match_3_)
-        _OAT(exec_stage_2_p_reg_decr_3_)
-        _OAT(exec_stage_2_p_reg_delete_3_)
+        // == Define Replace case check after all P_registers reported status ==
+        #define Table_set_replace(pi)                                                       \
+            action set_replaced_at_stage_## pi ##_(){ ig_md.replaced_at_stage_ ## pi =true;}\
+            table tb_set_replaced_at_stage_ ## pi ##_ {                                     \
+                /*Replace case if at least one P-registers report 1*/                       \
+                 actions = {                                                                \
+                    set_replaced_at_stage_## pi ##_;                                        \
+                    nop;                                                                    \
+                }                                                                           \
+                key = {                                                                     \
+                    ig_md.p_key_matched_## pi ##_1: ternary;                                \
+                    ig_md.p_key_matched_## pi ##_2: ternary;                                \
+                    ig_md.p_key_matched_## pi ##_3: ternary;                                \
+                    ig_md.p_key_matched_## pi ##_4: ternary;                                \
+                }                                                                           \
+                size = 16;                                                                  \
+                default_action = nop;                                                       \
+                const entries = {                                                           \
+                    (1, _, _, _): set_replaced_at_stage_## pi ##_();                        \
+                    (_, 1, _, _): set_replaced_at_stage_## pi ##_();                        \
+                    (_, _, 1, _): set_replaced_at_stage_## pi ##_();                        \
+                    (_, _, _, 1): set_replaced_at_stage_## pi ##_();                        \
+                }                                                                           \
+            }
+        
+        
+        Table_set_replace(1)
+        Table_set_replace(2)
 
-        _OAT(exec_stage_2_p_reg_match_4_)
-        _OAT(exec_stage_2_p_reg_decr_4_)
-        _OAT(exec_stage_2_p_reg_delete_4_)
 
 
-        action set_matched_at_stage_1_(){
-            ig_md.matched_at_stage_1=true;
-        }
-        action set_matched_at_stage_2_(){
-            ig_md.matched_at_stage_2=true;
-        }
-        _OAT(set_matched_at_stage_1_)
-        _OAT(set_matched_at_stage_2_)
-
-
-        // Define read/write actions for each F_register array
+        // ==Define read/write actions for each F_register array==
         #define RegAct_Counter(st) \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_incr = {  \
             void apply(inout bit<32> value, out bit<32> rv) {               \
@@ -530,11 +576,53 @@ control SwitchIngress(
 
         RegAct_Counter(1)
         RegAct_Counter(2)
-        _OAT(exec_stage_1_counter_incr)
-        _OAT(exec_stage_1_counter_fix)
-        _OAT(exec_stage_1_counter_write)
-        _OAT(exec_stage_2_counter_incr)
-        _OAT(exec_stage_2_counter_write)
+
+        // Create table for F-register in first table
+        table tb_update_f_register_1 {                       
+            /* In Fully match- increase, In replace- write 1 and in resubmit Fix*/                                      
+            actions = {                                  
+                exec_stage_1_counter_incr;                                     
+                exec_stage_1_counter_write;         
+                exec_stage_1_counter_fix;                
+                nop;                                                
+            }                                                       
+            key = {                                                 
+                ig_intr_md.resubmit_flag: exact;     
+                ig_md.replaced_at_stage_1: ternary;                    
+                ig_md.matched_at_stage_1: ternary;                  
+            }                                                       
+            size = 16;                                              
+            default_action = nop;                                   
+            const entries = {                                       
+                (0, true, _):     exec_stage_1_counter_write();   
+                (0, false, true): exec_stage_1_counter_incr();    
+                (1, _, _):        exec_stage_1_counter_fix();     
+            }                                                       
+        }
+
+        // Create table for F-register in second table
+        table tb_update_f_register_2 {                       
+            /* In Fully match- increase, In replace- write 1 and in resubmit Fix*/                                      
+            actions = {                                  
+                exec_stage_2_counter_incr;                                     
+                exec_stage_2_counter_write;               
+                nop;                                                
+            }                                                       
+            key = {                                                 
+                ig_intr_md.resubmit_flag: exact;     
+                ig_md.replaced_at_stage_2: ternary;                    
+                ig_md.matched_at_stage_1: ternary;                     
+                ig_md.matched_at_stage_2: ternary;                 
+            }                                                       
+            size = 16;                                              
+            default_action = nop;                                   
+            const entries = {                                       
+                (0, true, _, _):         exec_stage_2_counter_write();   
+                (0, _, true, true):      exec_stage_2_counter_write();   
+                (0, false, false, true): exec_stage_2_counter_incr();      
+            }                                                       
+        }
+
 
         
         action clear_resubmit_flag(){
@@ -545,31 +633,6 @@ control SwitchIngress(
             ig_intr_dprsr_md.resubmit_type = 1;
         }
 
-         
-
-        /*table tb_maybe_sip_init {
-        key = {
-            hdr.sip_meta.isValid(): exact;
-            hdr.tcp.isValid(): exact;
-            hdr.sip_meta.round: ternary;
-        }
-        actions = {
-            //sip_init;
-            sip_init_default_key;
-            sip_continue_round4;
-            sip_continue_round8;
-            sip_end_round12_tagack_verify;
-            nop;
-        }
-        default_action = nop; 
-        size = 16;
-        const entries={
-            (false, true, _): sip_init_default_key(); //change key from control plane
-            (true, true, 4): sip_continue_round4();
-            (true, true, 8): sip_continue_round8();
-            (true, true, 12): sip_end_round12_tagack_verify();
-        }
-        }*/
 
 
         #undef _OAT
@@ -593,106 +656,38 @@ control SwitchIngress(
 
             bool is_resubmitted=(bool) ig_intr_md.resubmit_flag;
 
-            // = Stage 1 match =
+            // === Table 1 ===
 
-            /*if(!is_resubmitted){
-                _OAT(exec_stage_1_p_reg_match_1_);
-                _OAT(exec_stage_1_p_reg_match_2_);
-                _OAT(exec_stage_1_p_reg_match_3_);
-                _OAT(exec_stage_1_p_reg_match_4_);
-            } else {
-                _OAT(exec_stage_1_p_reg_fix_1_);
-                _OAT(exec_stage_1_p_reg_fix_2_);
-                _OAT(exec_stage_1_p_reg_fix_3_);
-                _OAT(exec_stage_1_p_reg_fix_4_);
-            }*/
-
+            // Apply all P-registers to check them status
             _OAT(update_p_registers_1_1);
             _OAT(update_p_registers_1_2);
             _OAT(update_p_registers_1_3);
             _OAT(update_p_registers_1_4);
 
-            bit<16> max_p_counter_stage_1_1 = max(ig_md.p_key_matched_1_1, ig_md.p_key_matched_1_2);
-            bit<16> max_p_counter_stage_1_2 = max(ig_md.p_key_matched_1_3, ig_md.p_key_matched_1_4);
-            // TODO use this value to enable insert_threshold
-            bit<16> max_p_counter_stage_1 = max(max_p_counter_stage_1_1, max_p_counter_stage_1_2);
+            // Set match only in case all the P-registers reported match
+            _OAT(set_matched_at_stage_1_);
+            // Set replace if at least one P-register reported replace
+            _OAT(set_replaced_at_stage_1_);
 
-            //have a boolean alias, for immediate use in gateway table controlling stage 2 fid match
-            bool matched_at_stage_1 = max_p_counter_stage_1 <= 1;
-            
-            //also have a boolean phv value, for longer gateway matches
-            if(matched_at_stage_1)
-            {
-                _OAT(set_matched_at_stage_1_);
-            }
-
-            bool replaced_at_stage_1=((ig_md.p_key_matched_1_1==1) || 
-               (ig_md.p_key_matched_1_2==1) || 
-               (ig_md.p_key_matched_1_3==1) || 
-               (ig_md.p_key_matched_1_4==1));
-
-            // = Stage 1 incr =
-
-            if(!is_resubmitted){
-                if(replaced_at_stage_1){
-                    _OAT(exec_stage_1_counter_write);
-                }else if(ig_md.matched_at_stage_1){
-                    _OAT(exec_stage_1_counter_incr);
-                }  
-            }else{
-                _OAT(exec_stage_1_counter_fix);
-            }
+            // update the f register - based on the matched and replaced result
+            _OAT(update_f_register_1);
 
             
-            // = Stage 2 match =
+            // === Table 2 ===
 
-            if(!is_resubmitted && !matched_at_stage_1){
-                _OAT(exec_stage_2_p_reg_match_1_);
-                _OAT(exec_stage_2_p_reg_match_2_);
-            } else if(!is_resubmitted) {
-                _OAT(exec_stage_2_p_reg_decr_1_);
-                _OAT(exec_stage_2_p_reg_decr_2_);
-            }else{
-                _OAT(exec_stage_2_p_reg_delete_1_);
-                _OAT(exec_stage_2_p_reg_delete_2_);
-            }
+             // Apply all P-registers to check them status
+            _OAT(update_p_registers_2_1);
+            _OAT(update_p_registers_2_2);
+            _OAT(update_p_registers_2_3);
+            _OAT(update_p_registers_2_4);
 
-            bit<16> max_p_counter_stage_2_1 = max(ig_md.p_key_matched_2_1, ig_md.p_key_matched_2_2);
+            // Set match only in case all the P-registers reported match
+            _OAT(set_matched_at_stage_2_);
+            // Set replace if at least one P-register reported replace
+            _OAT(set_replaced_at_stage_2_);
 
-            if(!is_resubmitted && !matched_at_stage_1){
-                _OAT(exec_stage_2_p_reg_match_3_);
-                _OAT(exec_stage_2_p_reg_match_4_);
-            } else if(!is_resubmitted) {
-                _OAT(exec_stage_2_p_reg_decr_3_);
-                _OAT(exec_stage_2_p_reg_decr_4_);
-            }else{
-                _OAT(exec_stage_2_p_reg_delete_3_);
-                _OAT(exec_stage_2_p_reg_delete_4_);
-            }
-
-            bit<16> max_p_counter_stage_2_2 = max(ig_md.p_key_matched_2_3, ig_md.p_key_matched_2_4);
-            // TODO use this value to enable insert_threshold
-            bit<16> max_p_counter_stage_2 = max(max_p_counter_stage_2_1, max_p_counter_stage_2_2);
-
-             if(max_p_counter_stage_2 <= 1)
-            {
-                _OAT(set_matched_at_stage_2_);
-            }
-                
-
-            bool replaced_at_stage_2=((ig_md.p_key_matched_2_1==1) || 
-               (ig_md.p_key_matched_2_2==1) || 
-               (ig_md.p_key_matched_2_3==1) || 
-               (ig_md.p_key_matched_2_4==1));
-
-            // = Stage 2 incr =
-            if(!is_resubmitted){
-                if((matched_at_stage_1 && ig_md.matched_at_stage_2) || replaced_at_stage_2){
-                    _OAT(exec_stage_2_counter_write);
-                }else if(ig_md.matched_at_stage_2){
-                    _OAT(exec_stage_2_counter_incr);
-                }
-            }
+            // update the f register - based on the matched and replaced result
+            _OAT(update_f_register_2);
             
 
             clear_resubmit_flag();
