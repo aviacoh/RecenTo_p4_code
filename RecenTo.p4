@@ -18,8 +18,7 @@
 
 //== Preamble: macro, header and parser definitions
 #define INC 4
-//#define THRESHOLD_FIX 0xffe0 // 0xffff - 0x1f
-#define THRESHOLD_FIX 0xfffc
+#define THRESHOLD_FIX 0xffe0 // 0xffff - 0x1f
 #define FIX_P_COUNTER_VAL 0x80
 
 #define _OAT(act) table tb_## act {  \
@@ -347,7 +346,7 @@ control SwitchIngress(
             ig_md.stage_2_loc=(bit<16>) hash2.get({
                 3w2,
                 ig_md.key_part_1,
-		3w0,
+		        3w0,
                 ig_md.key_part_2,
                 3w0,
                 ig_md.key_part_3,
@@ -562,7 +561,7 @@ control SwitchIngress(
                 rv = 0;                                                     \
                 bit<32> in_value;                                           \
                 in_value = value;                                           \
-                value = in_value |+| ig_md.resubmit_data_read.fix_counter;  \
+                value = in_value |+| (ig_md.resubmit_data_read.fix_counter - 1);  \ // decrease 1 - as one packet counted twice
                 rv = value;                                                 \
             }                                                               \
         };                                                                  \
