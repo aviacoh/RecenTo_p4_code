@@ -132,9 +132,6 @@ struct ig_metadata_t {
     //register index to access (hash of key, with different hash functions)
     bit<16> stage_1_loc;
     bit<16> stage_2_loc;
-    //hash seeds, different width
-    bit<3> hash_seed_1;
-    bit<5> hash_seed_2;
 
     //is partial key matched register entry?
     bit<16> p_key_matched_1_1;
@@ -329,7 +326,7 @@ control SwitchIngress(
 // == Calculate array indices for array access
 
         Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x8005,false,false,false,0,0)) hash1;
-        Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x8005,false,false,false,0,0)) hash2;
+        Hash<bit<16>>(HashAlgorithm_t.CRC16, CRCPolynomial<bit<16>>(16w0x3D65,false,false,false,0,0)) hash2;
 
         action get_hashed_locations_1_(){
             ig_md.stage_1_loc=(bit<16>) hash1.get({
@@ -344,12 +341,13 @@ control SwitchIngress(
         }
         action get_hashed_locations_2_(){
             ig_md.stage_2_loc=(bit<16>) hash2.get({
-                3w2,
+                3w1,
                 ig_md.key_part_1,
-		        3w0,
+		        2w0,
                 ig_md.key_part_2,
-                3w0,
+                2w0,
                 ig_md.key_part_3,
+                1w0,
                 ig_md.key_part_4
             });
         }
@@ -548,7 +546,6 @@ control SwitchIngress(
         #define RegAct_Counter(st) \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_incr = {  \
             void apply(inout bit<32> value, out bit<32> rv) {               \
-                rv = 0;                                                     \
                 bit<32> in_value;                                           \
                 in_value = value;                                           \
                 value = in_value |+| 1;                                     \
@@ -557,14 +554,13 @@ control SwitchIngress(
         };                                                                  \
         action exec_stage_## st ##_counter_incr(){  ig_md.counter_read_## st =stage_## st ##_counter_incr.execute(ig_md.stage_## st ##_loc);} \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_fix = {  \
-            void apply(inout bit<32> value, out bit<32> rv) {               \
-                rv = 0;                                                     \
-                bit<32> in_value;                                           \
-                in_value = value;                                           \
-                value = in_value |+| (ig_md.resubmit_data_read.fix_counter - 1);  \ // decrease 1 - as one packet counted twice
-                rv = value;                                                 \
-            }                                                               \
-        };                                                                  \
+            void apply(inout bit<32> value, out bit<32> rv) {                       \
+                bit<32> in_value;                                                   \
+                in_value = value;                                                   \
+                value = in_value |+| ig_md.resubmit_data_read.fix_counter;          \ 
+                rv = value;                                                         \
+            }                                                                       \
+        };                                                                          \
         action exec_stage_## st ##_counter_fix(){  ig_md.counter_read_## st =stage_## st ##_counter_fix.execute(ig_md.stage_## st ##_loc);} \
         RegisterAction<bit<32>, _, bit<32>>(f_register_## st  ##_R) stage_## st ##_counter_write = {  \
             void apply(inout bit<32> value, out bit<32> rv) {               \
